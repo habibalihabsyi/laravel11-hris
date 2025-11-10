@@ -1,21 +1,24 @@
-import sys, json, face_recognition, os
+import sys, os, json
+from deepface import DeepFace
+import mysql.connector
+import numpy as np
+from dotenv import load_dotenv
 
 MODE = sys.argv[1]  # extract | match
 IMAGE_PATH = sys.argv[2]
 USER_ID = sys.argv[3] if len(sys.argv) > 3 else None
 
+load_dotenv()
+
 def extract_descriptor(image_path):
-    image = face_recognition.load_image_file(image_path)
-    encodings = face_recognition.face_encodings(image)
-    if len(encodings) == 0:
-        return None
-    return encodings[0].tolist()
+    try:
+        emb = DeepFace.represent(img_path=image_path, model_name='Facenet', enforce_detection=True)
+        return emb[0]["embedding"]
+    except Exception as e:
+        print(json.dumps(None))
+        sys.exit(0)
 
-def match_descriptor(image_path, user_id):
-    from dotenv import load_dotenv
-    import mysql.connector
-
-    load_dotenv()
+def match_descriptor(image_path):
     conn = mysql.connector.connect(
         host=os.getenv('DB_HOST', '127.0.0.1'),
         user=os.getenv('DB_USERNAME', 'root'),
@@ -27,28 +30,30 @@ def match_descriptor(image_path, user_id):
     users = cur.fetchall()
     conn.close()
 
-    image = face_recognition.load_image_file(image_path)
-    face_encodings = face_recognition.face_encodings(image)
-    if len(face_encodings) == 0:
-        return None
-    current = face_encodings[0]
+    try:
+        target = DeepFace.represent(img_path=image_path, model_name='Facenet')[0]["embedding"]
+    except Exception:
+        print(json.dumps(None))
+        sys.exit(0)
 
-    best_id = None
-    best_dist = 1.0
-    for user in users:
-        known = json.loads(user['face_descriptor'])
-        dist = face_recognition.face_distance([known], current)[0]
+    def distance(a, b):
+        a, b = np.array(a), np.array(b)
+        return np.linalg.norm(a - b)
+
+    best_id, best_dist = None, 999
+    for u in users:
+        known = json.loads(u["face_descriptor"])
+        dist = distance(known, target)
         if dist < best_dist:
-            best_dist = dist
-            best_id = user['id']
+            best_id, best_dist = u["id"], dist
 
     if best_dist <= 0.6:
-        return best_id
-    return None
+        print(best_id)
+    else:
+        print(json.dumps(None))
 
 if MODE == "extract":
     result = extract_descriptor(IMAGE_PATH)
     print(json.dumps(result))
 elif MODE == "match":
-    result = match_descriptor(IMAGE_PATH, USER_ID)
-    print(json.dumps(result))
+    match_descriptor(IMAGE_PATH)
